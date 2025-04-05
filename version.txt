@@ -1,0 +1,33 @@
+VSVersionInfo(
+    ffi=FixedFileInfo(
+        filevers=(1, 0, 0, 0),
+        prodvers=(1, 0, 0, 0),
+        mask=0x3f,
+        flags=0x0,
+        OS=0x40004,
+        fileType=0x1,
+        subtype=0x0,
+        date=(0, 0)
+    ),
+    kids=[
+        StringFileInfo(
+            [
+                StringTable(
+                    "040904B0",
+                    [
+                        StringStruct("ProductName", "JiaoWoQiang"),
+                        StringStruct("FileVersion", "1.0.0.0"),
+                        StringStruct("ProductVersion", "1.0.0.0"),
+                        StringStruct("FileDescription", "Get tickets"),
+                        StringStruct("InternalName", "Icecream"),
+                        StringStruct("LegalCopyright", "©Icecream"),
+                        StringStruct("OriginalFilename", "gymgui.exe"),
+                        StringStruct("CompanyName", "©Icecream"),
+                        StringStruct("Author", "Icecream")  # 添加作者信息
+                    ]
+                )
+            ]
+        ),
+        VarFileInfo([VarStruct("Translation", [0x0409, 0x04B0])])
+    ]
+)
