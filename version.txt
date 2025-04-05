@@ -16,12 +16,12 @@ VSVersionInfo(
                     "040904B0",
                     [
                         StringStruct("ProductName", "JiaoWoQiang"),
-                        StringStruct("FileVersion", "1.0.0.0"),
-                        StringStruct("ProductVersion", "1.0.0.0"),
+                        StringStruct("FileVersion", "3.0.0.0"),
+                        StringStruct("ProductVersion", "3.0.0.0"),
                         StringStruct("FileDescription", "Get tickets"),
                         StringStruct("InternalName", "Icecream"),
                         StringStruct("LegalCopyright", "©Icecream"),
-                        StringStruct("OriginalFilename", "gymgui.exe"),
+                        StringStruct("OriginalFilename", "bmgui.exe"),
                         StringStruct("CompanyName", "©Icecream"),
                         StringStruct("Author", "Icecream")  # 添加作者信息
                     ]
