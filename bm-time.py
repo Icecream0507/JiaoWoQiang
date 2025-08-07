@@ -3,7 +3,7 @@ import time
 from datetime import datetime, timedelta
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QLabel,
-    QLineEdit, QPushButton, QTextEdit, QHBoxLayout
+    QLineEdit, QPushButton, QTextEdit, QHBoxLayout, QCheckBox
 )
 import pytesseract
 
@@ -18,6 +18,10 @@ from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.chrome.service import Service # Not explicitly used in the provided code
 import pyautogui
 import pyperclip
+
+import io
+from PIL import Image
+import win32clipboard
 
 pytesseract.pytesseract.tesseract_cmd = r'D:\Application\Tesseract-ocr\tesseract.exe'  # 直接指定路径
 
@@ -52,13 +56,14 @@ class BookingThread(QThread):
     log_signal = pyqtSignal(str)      # 用于向UI发送日志消息的信号
     success_signal = pyqtSignal(str)  # 用于在成功预订后发送消息的信号
 
-    def __init__(self, start_time, end_time, loop_time=15.00):
+    def __init__(self, start_time, end_time, loop_time, headless=False):
         super().__init__()
         self.start_time = start_time
         self.end_time = end_time
         self.loop_time = loop_time  # 扫描间隔时间（分钟）
         self.running = True    # 控制线程运行状态的标志
         self.browser = None    # Selenium WebDriver实例，用于在停止时关闭
+        self.headless = headless # 新增：无头模式标志
 
     def stop(self):
         """
@@ -74,6 +79,34 @@ class BookingThread(QThread):
                 self.log(f"关闭浏览器时发生错误: {e}")
             self.browser = None # 清除浏览器引用
 
+    def copy_image_to_clipboard(self, image_path):
+        """
+        读取指定路径的图片文件，并将其内容复制到Windows剪贴板。
+        """
+        try:
+            image = Image.open(image_path)
+
+            # 将图像数据转换为剪贴板支持的格式（DIB）
+            output = io.BytesIO()
+            # 将图像转换为'BMP'格式，这是Windows剪贴板所支持的
+            image.convert("RGB").save(output, "BMP")
+            # 忽略BMP文件头，因为剪贴板需要的是DIB数据
+            data = output.getvalue()[14:] 
+            output.close()
+
+            # 打开剪贴板，清空内容，并设置新的数据
+            win32clipboard.OpenClipboard()
+            win32clipboard.EmptyClipboard()
+            # CF_DIB 是剪贴板用于位图数据的格式
+            win32clipboard.SetClipboardData(win32clipboard.CF_DIB, data)
+            win32clipboard.CloseClipboard()
+
+            print(f"图片 '{image_path}' 已成功复制到剪贴板。")
+            return True
+        except Exception as e:
+            print(f"复制图片到剪贴板失败: {e}")
+            return False
+        
     def send_wechat_message(self, file_path):
         """
         通过模拟键盘和鼠标操作，将截图发送到微信。
@@ -83,11 +116,11 @@ class BookingThread(QThread):
             self.log("尝试通过微信发送截图...")
             # 1. 打开微信 (Ctrl+Alt+W 是微信默认快捷键)
             pyautogui.hotkey('ctrl', 'alt', 'w')
-            time.sleep(2)
+            time.sleep(0.5)
 
             # 2. 搜索指定联系人 (这里是 "薛俊智"，建议将其配置化)
             pyautogui.hotkey('ctrl', 'f')
-            time.sleep(1)
+            time.sleep(0.5)
 
             search_text = "薛俊智" # 可以考虑将此设置为可配置项
             pyperclip.copy(search_text)
@@ -95,23 +128,24 @@ class BookingThread(QThread):
             pyautogui.hotkey('ctrl', 'v')
             time.sleep(0.5)
             pyautogui.press('enter')
-            time.sleep(1)
+            time.sleep(0.5)
 
             # 3. 点击文件按钮并发送文件
             # 这些坐标 (x=1080, y=1040, x=1190, y=1135) 是高度依赖于屏幕分辨率和微信UI的，非常脆弱。
             # 在不同环境下可能需要调整。
-            pyautogui.click(x=1080, y=1040)  # 点击文件按钮 (可能需要根据你的屏幕调整)
-            time.sleep(1)
+            self.copy_image_to_clipboard(file_path)
+            # pyautogui.click(x=1080, y=1040)  # 点击文件按钮 (可能需要根据你的屏幕调整)
+            # time.sleep(1)
 
-            pyperclip.copy(file_path)
-            time.sleep(0.5)
+            # pyperclip.copy(file_path)
+            # time.sleep(0.5)
             pyautogui.hotkey('ctrl', 'v')
             time.sleep(0.5)
             pyautogui.press('enter')
-            time.sleep(2)
-
-            pyautogui.press('enter') # 确认发送文件对话框
             time.sleep(0.5)
+
+            # pyautogui.press('enter') # 确认发送文件对话框
+            # time.sleep(0.5)
             # pyautogui.click(x=1190, y=1135)  # 点击发送按钮 (可能需要根据你的屏幕调整)
             self.log("微信发送截图成功!")
 
@@ -156,7 +190,11 @@ class BookingThread(QThread):
             try:
                 self.log("初始化浏览器...")
                 options = webdriver.ChromeOptions()
-                options.add_argument("--headless")  # 无头模式
+                # 根据 headless 标志决定是否使用无头模式
+                if self.headless:
+                    options.add_argument("--headless")
+                    self.log("ℹ️ 以无头模式运行")
+                
                 options.add_argument("--disable-gpu")
                 options.add_argument("--disable-blink-features=AutomationControlled")
                 options.add_experimental_option("excludeSwitches", ["enable-automation"])
@@ -224,7 +262,7 @@ class BookingThread(QThread):
                     (By.XPATH, '//*[@id="captcha-img"]')
                 ))
                 ActionChains(self.browser).move_to_element(captcha_element).click().perform()
-                time.sleep(time_to_sleep)
+                time.sleep(time_to_sleep * 2)
                 # 直接对元素截图（保存为PNG二进制数据）
                 image_data = captcha_element.screenshot_as_png
 
@@ -242,7 +280,7 @@ class BookingThread(QThread):
 
                 input_captcha_element.send_keys(verify_code)  # 输入识别的验证码
 
-                time.sleep(time_to_sleep)
+                time.sleep(time_to_sleep * 2)
 
                 self.log(f"识别的验证码: {verify_code}")
 
@@ -250,8 +288,7 @@ class BookingThread(QThread):
                     (By.XPATH, '//*[@id="submit-password-button"]')
                 ))
                 ActionChains(self.browser).move_to_element(login_button).click().perform()
-                time.sleep(time_to_sleep)
-
+                time.sleep(time_to_sleep * 2)
 
 
             self.log("等待登录成功...")
@@ -526,6 +563,11 @@ class BookingApp(QWidget):
         loop_layput.addWidget(self.loop_label)
         loop_layput.addWidget(self.loop_input)
 
+        # 无头模式勾选框
+        self.headless_checkbox = QCheckBox("无头模式 (不显示浏览器窗口)")
+        self.headless_checkbox.setFont(QFont("Arial", 12))
+        self.headless_checkbox.setChecked(False) # 默认不勾选
+
         # 按钮
         self.start_button = QPushButton("开始扫描")
         self.start_button.setFont(QFont("Arial", 14)) # 增大字体
@@ -595,6 +637,7 @@ class BookingApp(QWidget):
         layout.addLayout(start_layout)
         layout.addLayout(end_layout)
         layout.addLayout(loop_layput)
+        layout.addWidget(self.headless_checkbox)
         layout.addLayout(button_layout)
         layout.addWidget(self.log_text)
         self.setLayout(layout)
@@ -612,6 +655,7 @@ class BookingApp(QWidget):
             start_time = int(self.start_input.text())
             end_time = int(self.end_input.text())
             loop_time = float(self.loop_input.text())
+            headless_mode = self.headless_checkbox.isChecked() # 获取无头模式状态
 
             # 输入时间验证
             if not (6 <= start_time <= 22 and 6 <= end_time <= 22 and start_time <= end_time):
@@ -619,8 +663,8 @@ class BookingApp(QWidget):
                 return
 
             self.log_text.append(f"🚀 开始扫描时间段: {start_time}:00 到 {end_time}:00")
-            # 创建新的线程实例
-            self.booking_thread = BookingThread(start_time, end_time, loop_time)
+            # 创建新的线程实例，并传入无头模式状态
+            self.booking_thread = BookingThread(start_time, end_time, loop_time, headless=headless_mode)
             # 连接线程的信号到UI更新槽
             self.booking_thread.log_signal.connect(self.update_log)
             self.booking_thread.success_signal.connect(self.booking_success)
