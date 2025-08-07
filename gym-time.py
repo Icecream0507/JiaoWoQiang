@@ -1,6 +1,6 @@
 import sys
 import time
-import requests
+import pytesseract
 from datetime import datetime, timedelta
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QLabel,
@@ -16,6 +16,9 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException
 import pyautogui
 import pyperclip
+
+pytesseract.pytesseract.tesseract_cmd = r'D:\Application\Tesseract-ocr\tesseract.exe'  # 直接指定路径
+
 
 # --- 账户信息加载 ---
 # 尝试从 account.txt 文件中读取学号和密码。
@@ -47,10 +50,12 @@ class BookingThread(QThread):
     log_signal = pyqtSignal(str)      # 用于向UI发送日志消息的信号
     success_signal = pyqtSignal(str)  # 用于在成功预订后发送消息的信号
 
-    def __init__(self, start_time, end_time):
+    def __init__(self, start_time, end_time, loop_time=15.00):
         super().__init__()
         self.start_time = start_time
         self.end_time = end_time
+        self.loop_time = loop_time  # 扫描间隔时间（分钟）
+
         self.running = True    # 控制线程运行状态的标志
         self.browser = None    # Selenium WebDriver实例，用于在停止时关闭
 
@@ -131,24 +136,60 @@ class BookingThread(QThread):
         except Exception as e:
             self.log(f"微信发送失败: {e}")
 
+
+    def clean_captcha_text(self, text):
+        for char in text:
+            if char.isalpha():
+                continue
+            text = text.replace(char, "")
+        return text.strip()
+    
+
+
     def run(self):
         """
         线程的主执行函数，包含Selenium自动化预约流程。
+        增加自动恢复机制，在Timeout时重新启动流程。
         """
-        self.log("初始化浏览器...")
-        options = webdriver.ChromeOptions()
-        options.add_argument("--disable-gpu")
-        options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option("useAutomationExtension", False)
-        options.add_argument("--ignore-certificate-errors")
-        # options.add_argument("--start-maximized") # 最大化浏览器窗口
+        max_retries = 3  # 最大重试次数
+        retry_count = 0
+        
+        while self.running and retry_count < max_retries:
+            try:
+                self.log("初始化浏览器...")
+                options = webdriver.ChromeOptions()
+                options.add_argument("--disable-gpu")
+                options.add_argument("--disable-blink-features=AutomationControlled")
+                options.add_experimental_option("excludeSwitches", ["enable-automation"])
+                options.add_experimental_option("useAutomationExtension", False)
+                options.add_argument("--ignore-certificate-errors")
+
+                self.browser = webdriver.Chrome(options=options)
+                self.browser.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
+                self._main_booking_loop()  # 将主逻辑提取到单独方法中
+
+            except TimeoutException as te:
+                retry_count += 1
+                self.log(f"⚠️ 发生超时异常 (尝试 {retry_count}/{max_retries}): {str(te)}")
+                if self.browser:
+                    try:
+                        self.browser.quit()
+                    except:
+                        pass
+                time.sleep(5)  # 等待一段时间再重试
+                
+            except Exception as e:
+                self.log(f"⚠️ 发生意外错误: {str(e)}")
+                break  # 非Timeout异常直接退出循环
+                
+        if retry_count >= max_retries:
+            self.log("❌ 达到最大重试次数，停止扫描")
+        self._cleanup()
+
+    def _main_booking_loop(self):
 
         try:
-            self.browser = webdriver.Chrome(options=options)
-            # 绕过WebDriver检测
-            self.browser.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-
             self.log("正在打开预约页面...")
             self.browser.get(BOOKING_URL)
             wait = WebDriverWait(self.browser, 15) # 增加等待时间，提高稳定性
@@ -175,25 +216,40 @@ class BookingThread(QThread):
             ))
             mima_element.send_keys(mima)
 
-            captcha_element = wait.until(EC.presence_of_element_located(
-                (By.XPATH, '//*[@id="captcha-img"]')
-            ))
+            while 'jaccount' in self.browser.current_url:
+                captcha_element = wait.until(EC.presence_of_element_located(
+                    (By.XPATH, '//*[@id="captcha-img"]')
+                ))
+                ActionChains(self.browser).move_to_element(captcha_element).click().perform()
+                time.sleep(time_to_sleep)
+                # 直接对元素截图（保存为PNG二进制数据）
+                image_data = captcha_element.screenshot_as_png
 
-            # 直接对元素截图（保存为PNG二进制数据）
-            image_data = captcha_element.screenshot_as_png
+                # 保存到文件
+                with open("captcha.png", "wb") as f:
+                    f.write(image_data)
 
-            # 保存到文件
-            with open("captcha.png", "wb") as f:
-                f.write(image_data)
+                verify_code = pytesseract.image_to_string("captcha.png", config='--psm 8') # 使用OCR识别验证码
+                verify_code = self.clean_captcha_text(verify_code)  # 去除可能的空格或换行
+
+                input_captcha_element = wait.until(EC.presence_of_element_located(
+                    (By.XPATH, '//*[@id="input-login-captcha"]')
+                ))
+                input_captcha_element.clear()
+
+                input_captcha_element.send_keys(verify_code)  # 输入识别的验证码
+
+                time.sleep(time_to_sleep)
+
+                self.log(f"识别的验证码: {verify_code}")
+
+                login_button = wait.until(EC.presence_of_element_located(
+                    (By.XPATH, '//*[@id="submit-password-button"]')
+                ))
+                ActionChains(self.browser).move_to_element(login_button).click().perform()
+                time.sleep(time_to_sleep)
 
 
-            self.log("请在8秒内手动输入验证码并点击登录...")
-            # 改进：将阻塞的time.sleep(8)替换为可中断的循环
-            for _ in range(80): # 80 * 0.1秒 = 8秒
-                if not self.running:
-                    self.log("停止信号已接收，中断验证码等待。")
-                    return # 线程在此处安全退出 run 方法
-                time.sleep(0.1)
 
             # 在等待验证码结束后，再次检查是否已停止，以防用户在最后时刻点击停止
             if not self.running:
@@ -383,7 +439,6 @@ class BookingThread(QThread):
                                     self.log(f"时间段 {time_slot}:00 座位 {seat} 不可用.")
                             except TimeoutException:
                                 self.log(f"等待时间段 {time_slot}:00 座位 {seat} 元素超时，可能不可用或页面未加载。")
-                                self.browser.refresh() # 刷新页面尝试恢复
                                 time.sleep(1) # 等待页面刷新
                                 continue # 继续扫描下一个座位或时间段
                             except Exception as e:
@@ -396,8 +451,8 @@ class BookingThread(QThread):
                         break
 
                 if self.running: # 只有在线程仍然运行时才进行等待，否则直接退出
-                    self.log("当前轮次扫描完毕，等待15分钟后继续下一轮扫描...")
-                    self.log("下次扫描时间：", datetime.now() + timedelta(minutes=15))
+                    self.log(f"当前轮次扫描完毕，等待{self.loop_time}分钟后继续下一轮扫描...")
+                    self.log(f"下次扫描时间：{datetime.now() + timedelta(minutes=self.loop_time)}")
                     # 使用小步长睡眠，以便在收到停止信号时能及时中断
                     for _ in range(15 * 60): # 15分钟 * 60秒/分钟 = 900秒
                         if not self.running:
@@ -420,6 +475,16 @@ class BookingThread(QThread):
     def log(self, message):
         """发送日志消息到UI"""
         self.log_signal.emit(message)
+
+    def _cleanup(self):
+        """清理资源"""
+        if self.browser:
+            try:
+                self.browser.quit()
+                self.log("浏览器已关闭。")
+            except WebDriverException as e:
+                self.log(f"关闭浏览器时发生错误: {e}")
+            self.browser = None
 
 class BookingApp(QWidget):
     """
@@ -457,6 +522,15 @@ class BookingApp(QWidget):
         self.end_input.setFont(QFont("Arial", 12))
         end_layout.addWidget(self.end_label)
         end_layout.addWidget(self.end_input)
+
+        loop_layput = QHBoxLayout()
+        self.loop_label = QLabel("扫描间隔 (分钟):")
+        self.loop_label.setFont(QFont("Arial", 12))
+        self.loop_input = QLineEdit()
+        self.loop_input.setText("15")
+        self.loop_input.setFont(QFont("Arial", 12))
+        loop_layput.addWidget(self.loop_label)
+        loop_layput.addWidget(self.loop_input)
 
         # 按钮
         self.start_button = QPushButton("开始扫描")
@@ -526,6 +600,7 @@ class BookingApp(QWidget):
         # 添加到主布局
         layout.addLayout(start_layout)
         layout.addLayout(end_layout)
+        layout.addLayout(loop_layput)
         layout.addLayout(button_layout)
         layout.addWidget(self.log_text)
         self.setLayout(layout)
@@ -542,6 +617,8 @@ class BookingApp(QWidget):
         try:
             start_time = int(self.start_input.text())
             end_time = int(self.end_input.text())
+            loop_time = float(self.loop_input.text())
+
 
             # 输入时间验证
             if not (6 <= start_time <= 22 and 6 <= end_time <= 22 and start_time <= end_time):
@@ -550,7 +627,7 @@ class BookingApp(QWidget):
 
             self.log_text.append(f"🚀 开始扫描时间段: {start_time}:00 到 {end_time}:00")
             # 创建新的线程实例
-            self.booking_thread = BookingThread(start_time, end_time)
+            self.booking_thread = BookingThread(start_time, end_time, loop_time)
             # 连接线程的信号到UI更新槽
             self.booking_thread.log_signal.connect(self.update_log)
             self.booking_thread.success_signal.connect(self.booking_success)
