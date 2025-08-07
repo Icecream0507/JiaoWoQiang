@@ -11,6 +11,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QThread
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException
@@ -159,12 +160,15 @@ class BookingThread(QThread):
                 self.log("初始化浏览器...")
                 options = webdriver.ChromeOptions()
                 options.add_argument("--disable-gpu")
+                options.add_argument("--headless")  # 无头模式
                 options.add_argument("--disable-blink-features=AutomationControlled")
                 options.add_experimental_option("excludeSwitches", ["enable-automation"])
                 options.add_experimental_option("useAutomationExtension", False)
                 options.add_argument("--ignore-certificate-errors")
 
-                self.browser = webdriver.Chrome(options=options)
+                service = Service(executable_path="chromedriver.exe")
+
+                self.browser = webdriver.Chrome(service = service, options=options)
                 self.browser.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
                 self._main_booking_loop()  # 将主逻辑提取到单独方法中
@@ -454,7 +458,8 @@ class BookingThread(QThread):
                     self.log(f"当前轮次扫描完毕，等待{self.loop_time}分钟后继续下一轮扫描...")
                     self.log(f"下次扫描时间：{datetime.now() + timedelta(minutes=self.loop_time)}")
                     # 使用小步长睡眠，以便在收到停止信号时能及时中断
-                    for _ in range(15 * 60): # 15分钟 * 60秒/分钟 = 900秒
+                    wait_time = int(self.loop_time * 60)  # 将分钟转换为秒
+                    for _ in range(wait_time): # 15分钟 * 60秒/分钟 = 900秒
                         if not self.running:
                             break # 如果停止标志变为False，立即中断睡眠
                         time.sleep(1)

@@ -1,6 +1,5 @@
 import sys
 import time
-import requests
 from datetime import datetime, timedelta
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QLabel,
@@ -16,7 +15,7 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException
-# from selenium.webdriver.chrome.service import Service # Not explicitly used in the provided code
+from selenium.webdriver.chrome.service import Service # Not explicitly used in the provided code
 import pyautogui
 import pyperclip
 
@@ -113,7 +112,7 @@ class BookingThread(QThread):
 
             pyautogui.press('enter') # 确认发送文件对话框
             time.sleep(0.5)
-            pyautogui.click(x=1190, y=1135)  # 点击发送按钮 (可能需要根据你的屏幕调整)
+            # pyautogui.click(x=1190, y=1135)  # 点击发送按钮 (可能需要根据你的屏幕调整)
             self.log("微信发送截图成功!")
 
             # 提取日期和时间段信息，用于生成消息
@@ -157,13 +156,17 @@ class BookingThread(QThread):
             try:
                 self.log("初始化浏览器...")
                 options = webdriver.ChromeOptions()
+                options.add_argument("--headless")  # 无头模式
                 options.add_argument("--disable-gpu")
                 options.add_argument("--disable-blink-features=AutomationControlled")
                 options.add_experimental_option("excludeSwitches", ["enable-automation"])
                 options.add_experimental_option("useAutomationExtension", False)
                 options.add_argument("--ignore-certificate-errors")
 
-                self.browser = webdriver.Chrome(options=options)
+                service = Service(executable_path="chromedriver.exe")
+
+
+                self.browser = webdriver.Chrome(service=service, options=options)
                 self.browser.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
                 self._main_booking_loop()  # 将主逻辑提取到单独方法中

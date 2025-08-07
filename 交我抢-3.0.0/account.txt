@@ -1,2 +1,2 @@
-jaccount = Passerby_zzz
-mima = KFCCRAZY4
+jaccount = -
+mima = -
