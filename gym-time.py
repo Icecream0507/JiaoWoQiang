@@ -4,7 +4,7 @@ import pytesseract
 from datetime import datetime, timedelta
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QLabel,
-    QLineEdit, QPushButton, QTextEdit, QHBoxLayout
+    QLineEdit, QPushButton, QTextEdit, QHBoxLayout, QCheckBox
 )
 from PyQt6.QtGui import QIcon, QFont
 from PyQt6.QtCore import Qt, pyqtSignal, QThread
@@ -51,12 +51,12 @@ class BookingThread(QThread):
     log_signal = pyqtSignal(str)      # 用于向UI发送日志消息的信号
     success_signal = pyqtSignal(str)  # 用于在成功预订后发送消息的信号
 
-    def __init__(self, start_time, end_time, loop_time=15.00):
+    def __init__(self, start_time, end_time, loop_time=15.00, headless=False):
         super().__init__()
         self.start_time = start_time
         self.end_time = end_time
         self.loop_time = loop_time  # 扫描间隔时间（分钟）
-
+        self.headless = headless    # 新增：无头模式标志
         self.running = True    # 控制线程运行状态的标志
         self.browser = None    # Selenium WebDriver实例，用于在停止时关闭
 
@@ -144,7 +144,7 @@ class BookingThread(QThread):
                 continue
             text = text.replace(char, "")
         return text.strip()
-    
+
 
 
     def run(self):
@@ -154,13 +154,17 @@ class BookingThread(QThread):
         """
         max_retries = 3  # 最大重试次数
         retry_count = 0
-        
+
         while self.running and retry_count < max_retries:
             try:
                 self.log("初始化浏览器...")
                 options = webdriver.ChromeOptions()
                 options.add_argument("--disable-gpu")
-                options.add_argument("--headless")  # 无头模式
+                # 根据 headless 标志决定是否使用无头模式
+                if self.headless:
+                    options.add_argument("--headless")
+                    self.log("ℹ️ 以无头模式运行")
+
                 options.add_argument("--disable-blink-features=AutomationControlled")
                 options.add_experimental_option("excludeSwitches", ["enable-automation"])
                 options.add_experimental_option("useAutomationExtension", False)
@@ -182,11 +186,11 @@ class BookingThread(QThread):
                     except:
                         pass
                 time.sleep(5)  # 等待一段时间再重试
-                
+
             except Exception as e:
                 self.log(f"⚠️ 发生意外错误: {str(e)}")
                 break  # 非Timeout异常直接退出循环
-                
+
         if retry_count >= max_retries:
             self.log("❌ 达到最大重试次数，停止扫描")
         self._cleanup()
@@ -378,8 +382,12 @@ class BookingThread(QThread):
                                     tips_element = wait.until(EC.presence_of_element_located(
                                         (By.XPATH, '//*[@id="apointmentDetails"]/div[2]/div[2]/div[3]/div/div[3]/div/div[1]/label/span[1]/span')
                                     ))
-                                    ActionChains(self.browser).move_to_element(tips_element).click().perform()
-                                    time.sleep(time_to_sleep)
+                                    checked = tips_element.get_attribute("class")
+
+                                    if 'is-checked' not in checked:
+                                        self.log("勾选同意条款...")
+                                        ActionChains(self.browser).move_to_element(tips_element).click().perform()
+                                        time.sleep(time_to_sleep * 2)
 
                                     # 点击“提交订单”按钮
                                     submit_element = wait.until(EC.presence_of_element_located(
@@ -495,7 +503,7 @@ class BookingApp(QWidget):
     """
     PyQt6 应用程序主窗口，提供用户界面来控制预约线程。
     """
-    def __init__(self): # 修正了这里的语法错误
+    def __init__(self):
         super().__init__()
         self.initUI()
         self.booking_thread = None # 预约线程实例
@@ -536,6 +544,11 @@ class BookingApp(QWidget):
         self.loop_input.setFont(QFont("Arial", 12))
         loop_layput.addWidget(self.loop_label)
         loop_layput.addWidget(self.loop_input)
+        
+        # 无头模式勾选框
+        self.headless_checkbox = QCheckBox("无头模式 (不显示浏览器窗口)")
+        self.headless_checkbox.setFont(QFont("Arial", 12))
+        self.headless_checkbox.setChecked(False) # 默认不勾选
 
         # 按钮
         self.start_button = QPushButton("开始扫描")
@@ -600,12 +613,13 @@ class BookingApp(QWidget):
         self.log_text.setReadOnly(True) # 只读
         self.log_text.setFont(QFont("Consolas", 10)) # 使用等宽字体方便阅读日志
         # 修改背景为黑色，文字为白色
-        self.log_text.setStyleSheet("background-color: black; color: white; border: 1px solid #cccccc;") 
+        self.log_text.setStyleSheet("background-color: black; color: white; border: 1px solid #cccccc;")
 
         # 添加到主布局
         layout.addLayout(start_layout)
         layout.addLayout(end_layout)
         layout.addLayout(loop_layput)
+        layout.addWidget(self.headless_checkbox)
         layout.addLayout(button_layout)
         layout.addWidget(self.log_text)
         self.setLayout(layout)
@@ -623,7 +637,7 @@ class BookingApp(QWidget):
             start_time = int(self.start_input.text())
             end_time = int(self.end_input.text())
             loop_time = float(self.loop_input.text())
-
+            headless_mode = self.headless_checkbox.isChecked() # 获取无头模式状态
 
             # 输入时间验证
             if not (6 <= start_time <= 22 and 6 <= end_time <= 22 and start_time <= end_time):
@@ -631,8 +645,8 @@ class BookingApp(QWidget):
                 return
 
             self.log_text.append(f"🚀 开始扫描时间段: {start_time}:00 到 {end_time}:00")
-            # 创建新的线程实例
-            self.booking_thread = BookingThread(start_time, end_time, loop_time)
+            # 创建新的线程实例，并传入无头模式状态
+            self.booking_thread = BookingThread(start_time, end_time, loop_time, headless=headless_mode)
             # 连接线程的信号到UI更新槽
             self.booking_thread.log_signal.connect(self.update_log)
             self.booking_thread.success_signal.connect(self.booking_success)
